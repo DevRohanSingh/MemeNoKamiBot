@@ -101,7 +101,7 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_GROUP_ID=-1001234567890
 TELEGRAM_TOPIC_ID=143
 ```
-<strong><em>NOTE: Replace the placeholders with your actual credentials.</em></strong>
+><strong><em> NOTE: Remove ``.example`` from ``.env.example`` file and Replace the placeholders inside it with your actual credentials.</em></strong>
 
 ## 🚀 Running the Bot
 ### 6. Run the bot using:
