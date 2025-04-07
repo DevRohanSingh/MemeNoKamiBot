@@ -1,13 +1,10 @@
 # 🤖 MemeNoKamiBot
 
 <p align="center">
-  <img src="botInAction.png" alt="Main Features Showcase" width="48%" />
+  <img src="images/botInAction.png" alt="Main Features Showcase" width="48%" />
   &nbsp;
-  <img src="botInAction2.png" alt="Bot in Action" width="48%" />
+  <img src="images/botInAction2.png" alt="Bot in Action" width="48%" />
 </p>
-
-
-
 
 **MemeNoKamiBot** is a Telegram bot that fetches top memes from popular Reddit subreddits and automatically posts them to a designated Telegram group topic. It's built with Python using `python-telegram-bot`, `PRAW`, and `dotenv`.
 
@@ -20,9 +17,9 @@
 - 🕓 **Delay Logic**: Manual drops delay the next scheduled drop by 1 hour to avoid spamming.
 - ❌ **Duplicate Filtering**: Skips reposts by tracking previously posted Reddit IDs.
 - 🎥 **Media Support**: Handles images, videos, `.gif`, `.gifv`, and `.mp4` formats.
-- 📦 **Persistent Storage**: Saves posted IDs to a local JSON file.
+- 📦 **Persistent Storage**: Saves posted IDs to Firebase Realtime Database for durability.
 - 📊 **Status Dashboard**: `/status` command shows stats, uptime, and upcoming drop time.
-- 🔐 **Credential Security**: Uses `.env` file for API credentials to keep secrets safe.
+- 🔐 **Credential Security**: Uses `.env` for API credentials, including Firebase service account JSON.
 - ♻️ **Daily Reset**: Clears duplicate tracker daily to allow fresh content.
 
 ---
@@ -30,7 +27,6 @@
 ## 💬 Bot Commands
 
 **MemeNoKamiBot** responds to the following slash `/` commands in your Telegram group:
-
 
 ### 📥 `/dropmemes`
 
@@ -93,15 +89,24 @@ pip install -r requirements.txt
 ## 🔐 Configuration
 ### 5. Create a .env File
 ```ini
-REDDIT_CLIENT_ID=WjanXYZQOSDFJASLFMmw
-REDDIT_CLIENT_SECRET=0Ycs8_SJLKDFJSDFLK8d7tIIHsifHUACjA
-REDDIT_USER_AGENT=MemeBot/0.1 by TheLOLInShadow
+REDDIT_CLIENT_ID=your_reddit_client_id
+REDDIT_CLIENT_SECRET=your_reddit_secret
+REDDIT_USER_AGENT=MemeBot/0.1 by your_reddit_username
 
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_GROUP_ID=-1001234567890
 TELEGRAM_TOPIC_ID=143
+
+FIREBASE_DATABASE_URL=https://reddittotelegrammemebot-default-rtdb.asia-southeast1.firebasedatabase.app/
+FIREBASE_KEY_JSON={"type":"service_account","project_id":"your-project-id", ... }
+
 ```
-><strong><em> NOTE: Remove ``.example`` from ``.env.example`` file and Replace the placeholders inside it with your actual credentials.</em></strong>
+> 🔐 Important Notes: 
+- "You no longer need a firebase_key.json file!"
+- "Copy your Firebase service account JSON, minify it to a single line, and paste it into FIREBASE_KEY_JSON."
+- "Minify tool: https://jsonformatter.org/json-minify"
+- Remove ``.example`` from ``.env.example`` file and Replace the placeholders inside it with your actual credentials.
+
 
 ## 🚀 Running the Bot
 ### 6. Run the bot using:

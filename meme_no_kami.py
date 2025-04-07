@@ -3,7 +3,7 @@
 # delay the next automatic drop by 1 hour whenever someone uses /dropmemes manually (To avoid meme spam 💥)
 # /status: show the next auto meme drop time
 # Fetches top 5 memes from each subreddit every hour
-# Avoids duplicates even across restarts (using posted_ids.json)
+# Avoids duplicates even across restarts (using posted_ids stored on the firebase (db))
 # Supports images, GIFs, videos, .gifv auto-converted
 # Clears old posted_ids every 24 hours to keep memory clean
 # Logs errors and operations
@@ -12,6 +12,7 @@ import os
 import json
 import time
 import asyncio
+import random
 import logging
 from datetime import datetime, timedelta
 import nest_asyncio
@@ -20,14 +21,16 @@ from telegram import Bot, Update, InlineKeyboardMarkup, InlineKeyboardButton, Ca
 from telegram.constants import ParseMode
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
                           ContextTypes)
-from telegram.error import TelegramError
+from telegram.error import TelegramError, RetryAfter
 from keep_alive import keep_alive
 from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials, db, initialize_app
 
 load_dotenv('.env')
 keep_alive()
 
-
+DATABASE_URL = 'https://reddittotelegrammemebot-default-rtdb.asia-southeast1.firebasedatabase.app/'
 # === CONFIG ===
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
@@ -37,12 +40,21 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_GROUP_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 TELEGRAM_TOPIC_ID = int(os.getenv("TELEGRAM_TOPIC_ID"))
 
-SUBREDDITS = [
-    'ProgrammerHumor', 'ProgrammerAnimemes', 'dankmemes', 'funny', 'memes', 'PrequelMemes', 'Wholesomememes'
+# SUBREDDITS = [
+#     'ProgrammerHumor', 'ProgrammerAnimemes', 'dankmemes', 'funny', 'memes', 'PrequelMemes', 'Wholesomememes'
+# ]
+
+# instead of posting from all subreddits every hour, divide them into groups:
+# Then pick a different batch each hour (rotate through them), so you're only posting from 1 batch/hour:
+SUBREDDIT_BATCHES = [
+    ['dankmemes', 'memes'],
+    ['ProgrammerHumor', 'PrequelMemes'],
+    ['funny', 'Wholesomememes'],
+    ['ProgrammerAnimemes']
 ]
 
 
-POSTED_IDS_FILE = 'posted_ids.json'
+# POSTED_IDS_FILE = 'posted_ids.json'
 
 # === INIT ===
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
@@ -54,20 +66,53 @@ reddit = praw.Reddit(
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 # === LOAD/SAVE POSTED IDS ===
+# def load_posted_ids():
+#     if os.path.exists(POSTED_IDS_FILE):
+#         try:
+#             with open(POSTED_IDS_FILE, 'r') as f:
+#                 return set(json.load(f))
+#         except json.JSONDecodeError:
+#             logging.warning("⚠️ Failed to decode posted_ids.json, starting fresh.")
+#             return set()
+#     return set()
+
+# def save_posted_ids(ids):
+#     with open(POSTED_IDS_FILE, 'w') as f:
+#         json.dump(list(ids), f)
+
+# === Firebase Init ===
+# Load the JSON key from environment
+firebase_key_json = os.getenv("FIREBASE_KEY_JSON")
+firebase_creds_dict = json.loads(firebase_key_json)
+
+# Initialize Firebase directly with dict
+cred = credentials.Certificate(firebase_creds_dict)
+initialize_app(cred, {
+    'databaseURL': DATABASE_URL
+})
+
+FIREBASE_PATH = '/posted_ids'
+
+# === LOAD FROM FIREBASE ===
 def load_posted_ids():
-    if os.path.exists(POSTED_IDS_FILE):
-        try:
-            with open(POSTED_IDS_FILE, 'r') as f:
-                return set(json.load(f))
-        except json.JSONDecodeError:
-            logging.warning("⚠️ Failed to decode posted_ids.json, starting fresh.")
-            return set()
+    try:
+        ref = db.reference(FIREBASE_PATH)
+        data = ref.get()
+        if data:
+            return set(data)
+    except Exception as e:
+        logging.warning(f"⚠️ Failed to load from Firebase: {e}")
     return set()
 
+# === SAVE TO FIREBASE ===
 def save_posted_ids(ids):
-    with open(POSTED_IDS_FILE, 'w') as f:
-        json.dump(list(ids), f)
-
+    try:
+        ref = db.reference(FIREBASE_PATH)
+        ref.set(list(ids))
+    except Exception as e:
+        logging.error(f"❌ Failed to save to Firebase: {e}")
+        
+        
 posted_ids = load_posted_ids()
 last_reset = time.time()
 next_auto_drop = time.time()
@@ -106,11 +151,22 @@ def get_unique_memes(subreddit_name, count=5):
 
     return memes
 
+def get_current_subreddit_batch():
+    index = int((time.time() // 3600) % len(SUBREDDIT_BATCHES))
+    return SUBREDDIT_BATCHES[index]
+
 # === POST TO TELEGRAM ===
+# ✅ Reduced meme count per subreddit
+# ✅ Delay between each post
+# ✅ Staggered delay between subreddits
+# ✅ Optional: Subreddit batching (for advanced rotation)
+# ✅ Flood control retry handling
 async def post_memes():
     logging.info("🚀 Starting meme run...")
-    for subreddit in SUBREDDITS:
-        memes = get_unique_memes(subreddit, count=5)
+    # Use rotating batches
+    subreddits_to_post = get_current_subreddit_batch()
+    for subreddit in subreddits_to_post:
+        memes = get_unique_memes(subreddit, count=2)
         if not memes:
             logging.warning(f"⚠️ No memes found for r/{subreddit}")
             continue
@@ -143,11 +199,17 @@ async def post_memes():
                         message_thread_id=TELEGRAM_TOPIC_ID
                     )
                 logging.info(f"✅ Posted from r/{meme['subreddit']}")
-                await asyncio.sleep(3)
+                await asyncio.sleep(random.randint(4, 6))  # Delay between posts
+                
+            except RetryAfter as e:
+                logging.warning(f"⏳ Rate limit hit. Retrying in {e.retry_after} seconds.")
+                await asyncio.sleep(e.retry_after)
             except TelegramError as e:
                 logging.error(f"❌ Telegram error: {e}")
             except Exception as e:
                 logging.error(f"❗ General error: {e}")
+        # Delay Between subreddits
+        await asyncio.sleep(random.randint(10, 20)) 
 
 # === HANDLERS ===
 async def drop_memes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -209,7 +271,8 @@ async def hourly_loop():
         now = time.time()
         if now >= next_auto_drop:
             if now - last_reset >= 86400:
-                posted_ids.clear()
+                db.reference(FIREBASE_PATH).delete()
+                # posted_ids.clear()
                 last_reset = now
                 logging.info("🧹 Cleared posted IDs for new day.")
 
