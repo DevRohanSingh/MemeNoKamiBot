@@ -1,13 +1,3 @@
-# ✅ What’s included:
-# /dropmemes (only works for admins): The bot will immediately start posting memes 🎉
-# delay the next automatic drop by 1 hour whenever someone uses /dropmemes manually (To avoid meme spam 💥)
-# /status: show the next auto meme drop time
-# Fetches top 5 memes from each subreddit every hour
-# Avoids duplicates even across restarts (using posted_ids stored on the firebase (db))
-# Supports images, GIFs, videos, .gifv auto-converted
-# Clears old posted_ids every 24 hours to keep memory clean
-# Logs errors and operations
-
 import os
 import json
 import time
@@ -19,45 +9,46 @@ import nest_asyncio
 import praw
 from telegram import Bot, Update, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from telegram.constants import ParseMode
-from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
-                          ContextTypes)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import TelegramError, RetryAfter
-from keep_alive import keep_alive
 from dotenv import load_dotenv
-import firebase_admin
-from firebase_admin import credentials, db, initialize_app
+from logging.handlers import RotatingFileHandler
 
 load_dotenv('.env')
-keep_alive()
 
+# Configuration
 DATABASE_URL = 'https://reddittotelegrammemebot-default-rtdb.asia-southeast1.firebasedatabase.app/'
-# === CONFIG ===
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT")
-
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_GROUP_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 TELEGRAM_TOPIC_ID = int(os.getenv("TELEGRAM_TOPIC_ID"))
 
-# SUBREDDITS = [
-#     'ProgrammerHumor', 'ProgrammerAnimemes', 'dankmemes', 'funny', 'memes', 'PrequelMemes', 'Wholesomememes'
-# ]
-
-# instead of posting from all subreddits every hour, divide them into groups:
-# Then pick a different batch each hour (rotate through them), so you're only posting from 1 batch/hour:
 SUBREDDIT_BATCHES = [
-    ['dankmemes', 'memes'],
-    ['ProgrammerHumor', 'PrequelMemes'],
-    ['funny', 'Wholesomememes'],
-    ['ProgrammerAnimemes']
+    ['dankmemes', 'memes', 'ProgrammerHumor', 'ProgrammerAnimemes', 'funny', 'Animemes', 'anime']
 ]
+    # ['Wholesomememes', 'Unexpected', 'ContagiousLaughter'],
+    # ['nextfuckinglevel', 'MadeMeSmile', 'HumansBeingBros'],
+    # ['BeAmazed', 'toptalent', 'maybemaybemaybe', 'KidsAreFuckingStupid', 'oddlysatisfying', ],
+    # ['interestingasfuck', 'mildlyinteresting', 'Damnthatsinteresting', 'todayilearned', 'Satisfyingasfuck', 'aww']
 
+POSTED_IDS_FILE = 'posted_ids.json'
 
-# POSTED_IDS_FILE = 'posted_ids.json'
+# === SETUP LOGGING ===
+log_format = '[%(asctime)s] %(levelname)s - %(message)s'
+file_handler = RotatingFileHandler(
+    "meme.log",
+    maxBytes=5*1024*1024,  # 5 MB
+    backupCount=3,
+    encoding="utf-8"
+)
+file_handler.setFormatter(logging.Formatter(log_format))
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter(log_format))
+logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
 
-# === INIT ===
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
+# === INIT SERVICES ===
 reddit = praw.Reddit(
     client_id=REDDIT_CLIENT_ID,
     client_secret=REDDIT_CLIENT_SECRET,
@@ -66,53 +57,26 @@ reddit = praw.Reddit(
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 # === LOAD/SAVE POSTED IDS ===
-# def load_posted_ids():
-#     if os.path.exists(POSTED_IDS_FILE):
-#         try:
-#             with open(POSTED_IDS_FILE, 'r') as f:
-#                 return set(json.load(f))
-#         except json.JSONDecodeError:
-#             logging.warning("⚠️ Failed to decode posted_ids.json, starting fresh.")
-#             return set()
-#     return set()
-
-# def save_posted_ids(ids):
-#     with open(POSTED_IDS_FILE, 'w') as f:
-#         json.dump(list(ids), f)
-
-# === Firebase Init ===
-# Load the JSON key from environment
-firebase_key_json = os.getenv("FIREBASE_KEY_JSON")
-firebase_creds_dict = json.loads(firebase_key_json)
-
-# Initialize Firebase directly with dict
-cred = credentials.Certificate(firebase_creds_dict)
-initialize_app(cred, {
-    'databaseURL': DATABASE_URL
-})
-
-FIREBASE_PATH = '/posted_ids'
-
-# === LOAD FROM FIREBASE ===
 def load_posted_ids():
-    try:
-        ref = db.reference(FIREBASE_PATH)
-        data = ref.get()
-        if data:
-            return set(data)
-    except Exception as e:
-        logging.warning(f"⚠️ Failed to load from Firebase: {e}")
+    logging.info("🔄 Loading posted_ids from file...")
+    if os.path.exists(POSTED_IDS_FILE):
+        try:
+            with open(POSTED_IDS_FILE, 'r') as f:
+                ids = set(json.load(f))
+                logging.info(f"✅ Loaded {len(ids)} posted IDs.")
+                return ids
+        except json.JSONDecodeError:
+            logging.warning("⚠️ Failed to decode posted_ids.json, starting fresh.")
+            return set()
+    logging.info("📁 posted_ids.json not found, starting fresh.")
     return set()
 
-# === SAVE TO FIREBASE ===
 def save_posted_ids(ids):
-    try:
-        ref = db.reference(FIREBASE_PATH)
-        ref.set(list(ids))
-    except Exception as e:
-        logging.error(f"❌ Failed to save to Firebase: {e}")
-        
-        
+    logging.info("💾 Saving posted_ids to file...")
+    with open(POSTED_IDS_FILE, 'w') as f:
+        json.dump(list(ids), f)
+    logging.info("✅ posted_ids saved.")
+
 posted_ids = load_posted_ids()
 last_reset = time.time()
 next_auto_drop = time.time()
@@ -125,7 +89,8 @@ def convert_gifv_to_mp4(url):
     return url.replace('.gifv', '.mp4')
 
 # === GET MEMES ===
-def get_unique_memes(subreddit_name, count=5):
+def get_unique_memes(subreddit_name, count=25):
+    logging.info(f"📥 Fetching memes from r/{subreddit_name}...")
     memes = []
     seen = 0
     subreddit = reddit.subreddit(subreddit_name)
@@ -146,70 +111,81 @@ def get_unique_memes(subreddit_name, count=5):
                 'is_video': submission.is_video,
                 'subreddit': subreddit_name
             })
-            posted_ids.add(submission.id)
             seen += 1
-
+    logging.info(f"✅ Fetched {len(memes)} new memes from r/{subreddit_name}")
     return memes
 
 def get_current_subreddit_batch():
-    index = int((time.time() // 3600) % len(SUBREDDIT_BATCHES))
+    # index = int((time.time() // 3600) % len(SUBREDDIT_BATCHES))
+    index = 0
+    logging.info(f"🎯 Using subreddit batch index: {index}")
     return SUBREDDIT_BATCHES[index]
 
+# === SEND MEME WITH RETRY LOGIC ===
+async def send_meme(meme):
+    max_retries = 5
+    delay = 1  # start with 1 second delay
+    caption = f"*{meme['title']}*\nFrom r/{meme['subreddit']}"
+    for attempt in range(1, max_retries + 1):
+        try:
+            if meme['url'].endswith('.gif'):
+                await bot.send_animation(
+                    chat_id=TELEGRAM_GROUP_ID,
+                    animation=meme['url'],
+                    caption=caption,
+                    parse_mode=ParseMode.MARKDOWN,
+                    message_thread_id=TELEGRAM_TOPIC_ID
+                )
+            elif meme['is_video'] or meme['url'].endswith('.mp4'):
+                await bot.send_video(
+                    chat_id=TELEGRAM_GROUP_ID,
+                    video=meme['url'],
+                    caption=caption,
+                    parse_mode=ParseMode.MARKDOWN,
+                    message_thread_id=TELEGRAM_TOPIC_ID
+                )
+            else:
+                await bot.send_photo(
+                    chat_id=TELEGRAM_GROUP_ID,
+                    photo=meme['url'],
+                    caption=caption,
+                    parse_mode=ParseMode.MARKDOWN,
+                    message_thread_id=TELEGRAM_TOPIC_ID
+                )
+            logging.info(f"✅ Posted meme from r/{meme['subreddit']}")
+            # If post is successful, return True (caller will add the meme ID)
+            return True
+        except RetryAfter as e:
+            logging.warning(f"⏳ Rate limit hit on attempt {attempt}. Retrying in {e.retry_after} seconds.")
+            await asyncio.sleep(e.retry_after)
+        except TelegramError as e:
+            logging.error(f"❌ Telegram error on attempt {attempt}: {e}")
+            # For network-related errors, we can retry.
+            await asyncio.sleep(delay)
+        except Exception as e:
+            logging.error(f"❗ General error on attempt {attempt}: {e}")
+            await asyncio.sleep(delay)
+        delay *= 2  # exponential backoff
+    logging.error(f"❌ Failed to post meme from r/{meme['subreddit']} after {max_retries} attempts.")
+    return False
+
 # === POST TO TELEGRAM ===
-# ✅ Reduced meme count per subreddit
-# ✅ Delay between each post
-# ✅ Staggered delay between subreddits
-# ✅ Optional: Subreddit batching (for advanced rotation)
-# ✅ Flood control retry handling
 async def post_memes():
     logging.info("🚀 Starting meme run...")
-    # Use rotating batches
     subreddits_to_post = get_current_subreddit_batch()
     for subreddit in subreddits_to_post:
-        memes = get_unique_memes(subreddit, count=2)
+        memes = get_unique_memes(subreddit, count=5)
         if not memes:
             logging.warning(f"⚠️ No memes found for r/{subreddit}")
             continue
-
         for meme in memes:
-            try:
-                caption = f"*{meme['title']}*\nFrom r/{meme['subreddit']}"
-                if meme['url'].endswith('.gif'):
-                    await bot.send_animation(
-                        chat_id=TELEGRAM_GROUP_ID,
-                        animation=meme['url'],
-                        caption=caption,
-                        parse_mode=ParseMode.MARKDOWN,
-                        message_thread_id=TELEGRAM_TOPIC_ID
-                    )
-                elif meme['is_video'] or meme['url'].endswith('.mp4'):
-                    await bot.send_video(
-                        chat_id=TELEGRAM_GROUP_ID,
-                        video=meme['url'],
-                        caption=caption,
-                        parse_mode=ParseMode.MARKDOWN,
-                        message_thread_id=TELEGRAM_TOPIC_ID
-                    )
-                else:
-                    await bot.send_photo(
-                        chat_id=TELEGRAM_GROUP_ID,
-                        photo=meme['url'],
-                        caption=caption,
-                        parse_mode=ParseMode.MARKDOWN,
-                        message_thread_id=TELEGRAM_TOPIC_ID
-                    )
-                logging.info(f"✅ Posted from r/{meme['subreddit']}")
-                await asyncio.sleep(random.randint(4, 6))  # Delay between posts
-                
-            except RetryAfter as e:
-                logging.warning(f"⏳ Rate limit hit. Retrying in {e.retry_after} seconds.")
-                await asyncio.sleep(e.retry_after)
-            except TelegramError as e:
-                logging.error(f"❌ Telegram error: {e}")
-            except Exception as e:
-                logging.error(f"❗ General error: {e}")
-        # Delay Between subreddits
-        await asyncio.sleep(random.randint(10, 20)) 
+            success = await send_meme(meme)
+            if success:
+                # Record the post only if sending succeeded
+                posted_ids.add(meme['id'])
+            # Wait a short random duration between posts (even after failed attempt)
+            await asyncio.sleep(random.randint(4, 6))
+        await asyncio.sleep(random.randint(10, 20))
 
 # === HANDLERS ===
 async def drop_memes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -219,10 +195,12 @@ async def drop_memes_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if user_id not in admin_ids:
         await update.message.reply_text("🚫 You must be an admin to use this.")
+        logging.info(f"👮 Unauthorized /dropmemes attempt by user {user_id}")
         return
 
     global next_auto_drop
     next_auto_drop = time.time() + 3600
+    logging.info(f"📢 /dropmemes triggered by admin {user_id}")
     await update.message.reply_text("🔥 Dropping memes now...")
     await post_memes()
     await update.message.reply_text("✅ Memes posted!")
@@ -234,6 +212,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     since_reset = timedelta(seconds=int(now - last_reset))
     unique_posts = len(posted_ids)
 
+    logging.info(f"📊 /status requested by {update.effective_user.id}")
     text = (
         f"📊 *MemeNoKamiBot Status*\n\n"
         f"🕐 *Next Auto Drop:* {next_time} (in {next_in // 60} min)\n"
@@ -257,9 +236,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "drop_now":
         if user_id not in admin_ids:
             await query.edit_message_text("🚫 Only admins can trigger meme drops.")
+            logging.info(f"❌ Non-admin {user_id} tried to use drop_now")
             return
         global next_auto_drop
         next_auto_drop = time.time() + 3600
+        logging.info(f"🖲️ Inline button meme drop triggered by {user_id}")
         await query.edit_message_text("🔥 Dropping memes now...")
         await post_memes()
         await context.bot.send_message(chat_id, "✅ Memes posted manually!")
@@ -271,11 +252,9 @@ async def hourly_loop():
         now = time.time()
         if now >= next_auto_drop:
             if now - last_reset >= 86400:
-                db.reference(FIREBASE_PATH).delete()
-                # posted_ids.clear()
+                posted_ids.clear()
                 last_reset = now
                 logging.info("🧹 Cleared posted IDs for new day.")
-
             await post_memes()
             save_posted_ids(posted_ids)
             next_auto_drop = time.time() + 3600
@@ -287,9 +266,11 @@ async def hourly_loop():
 
 # === MAIN ===
 async def post_init(app: Application):
+    logging.info("📦 Starting background hourly loop...")
     app.create_task(hourly_loop())
 
 async def main():
+    logging.info("🤖 Starting MemeNoKamiBot...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("dropmemes", drop_memes_command))
     app.add_handler(CommandHandler("status", status_command))

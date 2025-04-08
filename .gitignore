@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 env/
 firebaseSecrets/
+meme.log
+posted_ids.json
